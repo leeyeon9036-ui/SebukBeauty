@@ -52,10 +52,8 @@ export default function Home() {
             <p className="text-sm text-muted-foreground">
               © 2024 성북구 대학생 미용실 예약 서비스. All rights reserved.
             </p>
-            <Link href="/admin/login">
-              <a className="text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="link-admin">
-                관리자 로그인
-              </a>
+            <Link href="/admin/login" className="text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="link-admin">
+              관리자 로그인
             </Link>
           </div>
         </div>
