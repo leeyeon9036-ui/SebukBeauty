@@ -1,3 +1,4 @@
+// src/components/BookingForm.tsx
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,23 +13,37 @@ import { ko } from "date-fns/locale";
 import { CalendarIcon, Upload } from "lucide-react";
 
 const SEONGBUK_DISTRICTS = [
-  "정릉동", "길음동", "성북동", "돈암동", "안암동", 
+  "정릉동", "길음동", "성북동", "돈암동", "안암동",
   "보문동", "종암동", "월곡동", "장위동", "석관동"
 ];
 
 const PRICE_RANGES = [
-  "1만원 미만", "1만원 - 2만원", "2만원 - 3만원", 
+  "1만원 미만", "1만원 - 2만원", "2만원 - 3만원",
   "3만원 - 5만원", "5만원 이상"
 ];
 
+// 10:00 ~ 20:00 (30분 단위)
 const TIME_SLOTS = Array.from({ length: 21 }, (_, i) => {
   const hour = Math.floor(10 + i / 2);
   const minute = i % 2 === 0 ? "00" : "30";
-  return `${hour}:${minute}`;
+  return `${hour.toString().padStart(2, "0")}:${minute}`;
 });
 
+// 깃헙 페이지(정적) → Render(API) 호출용 절대 경로
+const API_BASE = "https://sebukbeauty.onrender.com";
+
+async function toBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
 interface BookingFormProps {
-  onSubmit: (data: FormData) => void;
+  // 부모에서 필요하면 성공 시 데이터 확인용으로 쓸 수 있게, 선택 props로 둠
+  onSubmit?: (data: any) => void;
 }
 
 export default function BookingForm({ onSubmit }: BookingFormProps) {
@@ -44,24 +59,75 @@ export default function BookingForm({ onSubmit }: BookingFormProps) {
   const [treatment, setTreatment] = useState("");
   const [notes, setNotes] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const formData = new FormData();
-    if (date) formData.append("date", format(date, "yyyy-MM-dd"));
-    formData.append("time", time);
-    formData.append("name", name);
-    formData.append("phone", phone);
-    formData.append("school", school);
-    formData.append("studentId", studentId);
-    formData.append("email", email);
-    formData.append("location", location);
-    formData.append("price", price);
-    formData.append("treatment", treatment);
-    formData.append("notes", notes);
-    if (photo) formData.append("photo", photo);
-    
-    onSubmit(formData);
+
+    // 서버 스키마에 맞춘 페이로드(★ 가장 중요)
+    const payload: any = {
+      date:       date ? format(date, "yyyy-MM-dd") : "",
+      timeslot:   time,            // time → timeslot
+      name,
+      phone,
+      school,
+      student_id: studentId,       // studentId → student_id
+      email,
+      location,
+      price_range: price,          // price → price_range
+      style:       treatment,      // treatment → style
+      etc:         notes,          // notes → etc
+    };
+
+    if (!payload.date || !payload.timeslot || !payload.name || !payload.phone) {
+      alert("날짜/시간/이름/전화는 필수입니다.");
+      return;
+    }
+
+    if (photo) {
+      try {
+        payload.photo_base64 = await toBase64(photo);
+      } catch {
+        alert("사진 인코딩 중 오류가 발생했습니다.");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/reservations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const out = await res.json().catch(() => ({}));
+      if (res.ok && out?.ok) {
+        alert("예약이 완료되었습니다!");
+        onSubmit?.(payload); // 선택: 부모에서 후처리 원하면 사용
+        // 폼 초기화
+        setDate(undefined);
+        setTime("");
+        setName("");
+        setPhone("");
+        setSchool("");
+        setStudentId("");
+        setEmail("");
+        setLocation("");
+        setPrice("");
+        setTreatment("");
+        setNotes("");
+        setPhoto(null);
+      } else {
+        alert(out?.message || `예약 실패 (status ${res.status})`);
+        console.error("Create reservation failed:", res.status, out);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("네트워크/서버 통신 오류가 발생했습니다.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -77,11 +143,11 @@ export default function BookingForm({ onSubmit }: BookingFormProps) {
         </div>
 
         <Card className="p-8 md:p-12">
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="grid lg:grid-cols-2 gap-8">
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-foreground mb-4">예약 정보</h3>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="date">날짜 *</Label>
                   <Popover>
@@ -90,6 +156,7 @@ export default function BookingForm({ onSubmit }: BookingFormProps) {
                         variant="outline"
                         className="w-full justify-start text-left font-normal"
                         data-testid="button-date-picker"
+                        type="button"
                       >
                         <CalendarIcon className="mr-2 h-4 w-4" />
                         {date ? format(date, "PPP", { locale: ko }) : "날짜를 선택하세요"}
@@ -267,8 +334,9 @@ export default function BookingForm({ onSubmit }: BookingFormProps) {
                 size="lg"
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-lg py-6"
                 data-testid="button-submit"
+                disabled={submitting}
               >
-                예약 신청하기
+                {submitting ? "전송 중..." : "예약 신청하기"}
               </Button>
             </div>
           </form>
