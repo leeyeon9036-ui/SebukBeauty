@@ -1,9 +1,11 @@
 import type { Express } from "express";
+import expressPkg from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import session from "express-session";
 import { insertReservationSchema } from "@shared/schema";
 import multer from "multer";
+import { fileTypeFromFile } from "file-type";
 import path from "path";
 import fs from "fs";
 
@@ -13,7 +15,11 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Multer 설정 - 사진 업로드
+// 허용된 이미지 MIME 타입과 확장자
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+
+// Multer 설정 - 사진 업로드 (보안 강화)
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadsDir,
@@ -22,7 +28,14 @@ const upload = multer({
       cb(null, uniqueSuffix + path.extname(file.originalname));
     }
   }),
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype) || !ALLOWED_EXTENSIONS.includes(ext)) {
+      return cb(new Error('이미지 파일만 업로드 가능합니다. (jpg, jpeg, png, gif, webp)'));
+    }
+    cb(null, true);
+  }
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -44,11 +57,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.header("Access-Control-Allow-Origin", "*");
     next();
   });
-  app.use("/uploads", require("express").static(uploadsDir));
+  app.use("/uploads", expressPkg.static(uploadsDir));
 
   // 예약 생성 API
   app.post("/api/reservations", upload.single("photo"), async (req, res) => {
+    let uploadedFilePath: string | null = null;
+    
     try {
+      // 파일이 업로드된 경우 실제 타입 검증
+      if (req.file) {
+        uploadedFilePath = req.file.path;
+        const fileType = await fileTypeFromFile(uploadedFilePath);
+        
+        // 실제 파일 내용이 이미지가 아니면 거부
+        if (!fileType || !fileType.mime.startsWith('image/')) {
+          fs.unlinkSync(uploadedFilePath); // 파일 삭제
+          return res.status(400).json({ 
+            message: "이미지 파일만 업로드할 수 있습니다." 
+          });
+        }
+      }
+
       const reservationData = {
         date: req.body.date,
         time: req.body.time,
@@ -70,6 +99,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const reservation = await storage.createReservation(validated);
       res.status(201).json(reservation);
     } catch (error: any) {
+      // 오류 발생시 업로드된 파일 삭제
+      if (uploadedFilePath && fs.existsSync(uploadedFilePath)) {
+        fs.unlinkSync(uploadedFilePath);
+      }
+      
       console.error("Reservation creation error:", error);
       res.status(400).json({ 
         message: error.message || "예약 생성 중 오류가 발생했습니다." 
